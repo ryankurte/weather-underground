@@ -1,0 +1,21 @@
+[package]
+name = "weather-underground"
+description = "Weather Underground parser library"
+version = "0.1.0"
+authors = ["Jérémie Drouet <jeremie.drouet@gmail.com>"]
+license = "MIT"
+edition = "2018"
+readme = "readme.md"
+homepage = "https://github.com/jdrouet/weather-underground"
+repository = "https://github.com/jdrouet/weather-underground"
+keywords = ["weather", "parse"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+lazy_static = "1.4"
+log = "0.4"
+regex = "1"
+reqwest = { version = "0.10", features = ["cookies", "gzip", "json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

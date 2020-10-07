@@ -1,0 +1,33 @@
+{
+  "observations": [
+    {
+      "stationID": "ILETOT1",
+      "obsTimeUtc": "2020-10-07T10:02:49Z",
+      "obsTimeLocal": "2020-10-07 12:02:49",
+      "neighborhood": "Életot",
+      "softwareType": "WeatherRanger V2.5.2",
+      "country": "FR",
+      "solarRadiation": 161.3,
+      "lon": 0.449,
+      "realtimeFrequency": null,
+      "epoch": 1602064969,
+      "lat": 49.785,
+      "uv": 2.0,
+      "winddir": 265,
+      "humidity": 77.0,
+      "qcStatus": -1,
+      "metric": {
+        "temp": 14.1,
+        "heatIndex": 14.1,
+        "dewpt": 10.1,
+        "windChill": 14.1,
+        "windSpeed": 17.2,
+        "windGust": 24.1,
+        "pressure": 1004.4,
+        "precipRate": 0.0,
+        "precipTotal": 0.0,
+        "elev": 34.1
+      }
+    }
+  ]
+}
