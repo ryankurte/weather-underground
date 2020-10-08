@@ -23,14 +23,14 @@ impl ToString for ParseUnitError {
 }
 
 /// Representation for the unit type that will be used in the response
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Unit {
     English,
     Metric,
 }
 
 impl Unit {
-    fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         match self {
             Self::English => "e",
             Self::Metric => "m",
@@ -83,6 +83,12 @@ pub struct Observation {
     pub solar_radiation: Option<f64>,
     pub uv: Option<f64>,
     pub winddir: Option<f64>,
+}
+
+impl Observation {
+    pub fn values(&self) -> Option<&ObservationValue> {
+        self.metric.as_ref().or(self.imperial.as_ref())
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
