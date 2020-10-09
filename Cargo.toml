@@ -2,5 +2,6 @@
 
 members = [
     "cli",
+    "influxdb-bridge",
     "library"
 ]
