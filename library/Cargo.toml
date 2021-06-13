@@ -16,6 +16,6 @@ keywords = ["weather", "parse"]
 lazy_static = "1.4"
 log = "0.4"
 regex = "1"
-reqwest = { version = "0.10", features = ["cookies", "gzip", "json", "rustls-tls"] }
+reqwest = { version = "0.11.3", features = ["cookies", "gzip", "json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
