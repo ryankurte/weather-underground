@@ -1,96 +1,20 @@
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate log;
-
-use regex::Regex;
-use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use std::convert::TryFrom;
 
+use log::{trace, debug};
+use obs::HistoryResponse;
+use regex::Regex;
+use reqwest::StatusCode;
 use strum_macros::{Display, EnumString};
 
-lazy_static! {
+pub use chrono::{naive::NaiveDate, Datelike};
+
+
+mod obs;
+pub use obs::{Observation, ObservationResponse, ObservationValue, ObservationError};
+
+lazy_static::lazy_static! {
     static ref API_KEY_REGEX: Regex = Regex::new(r"apiKey=([a-z0-9]+)").unwrap();
-}
-
-#[derive(Debug)]
-pub struct ParseUnitError;
-
-impl ToString for ParseUnitError {
-    fn to_string(&self) -> String {
-        String::from("Invalid unit value")
-    }
-}
-
-/// Object that represents an observation with imperial or metric values
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ObservationValue {
-    pub dewpt: Option<f64>,
-    pub elev: Option<f64>,
-    pub heat_index: Option<f64>,
-    pub precip_rate: Option<f64>,
-    pub precip_total: Option<f64>,
-    pub pressure: Option<f64>,
-    pub temp: Option<f64>,
-    pub wind_chill: Option<f64>,
-    pub wind_gust: Option<f64>,
-    pub wind_speed: Option<f64>,
-}
-
-/// Object that represents an observation
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Observation {
-    pub country: String,
-    pub epoch: u64,
-    pub humidity: Option<f64>,
-    pub lat: f64,
-    pub lon: f64,
-    pub imperial: Option<ObservationValue>,
-    pub metric: Option<ObservationValue>,
-    pub neighborhood: String,
-    pub obs_time_local: String,
-    pub obs_time_utc: String,
-    pub solar_radiation: Option<f64>,
-    pub uv: Option<f64>,
-    pub winddir: Option<f64>,
-}
-
-impl Observation {
-    pub fn values(&self) -> Option<&ObservationValue> {
-        self.metric.as_ref().or(self.imperial.as_ref())
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct ObservationError {
-    pub code: String,
-    pub message: String,
-}
-
-/// Object returned by the weather underground API
-#[derive(Debug, Deserialize, Serialize)]
-pub struct ObservationResponse {
-    pub errors: Option<Vec<ObservationError>>,
-    pub observations: Option<Vec<Observation>>,
-    pub metadata: Option<serde_json::Value>,
-    pub success: Option<bool>,
-}
-
-impl ObservationResponse {
-    pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string(&self.observations)
-    }
-}
-
-impl TryFrom<serde_json::Value> for ObservationResponse {
-    type Error = serde_json::Error;
-
-    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
-        serde_json::from_value(value)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Display, EnumString)]
@@ -125,27 +49,36 @@ pub enum Unit {
 }
 
 
-pub struct ObservationArgs {
+/// Arguments for observation requests
+#[derive(Debug, PartialEq, Clone)]
+pub struct RequestOpts {
     pub format: Format,
     pub unit: Unit,
-    pub history: History,
     pub precision: Precision,
+    pub history: History,
+    pub date: Option<NaiveDate>,
 }
 
-impl Default for ObservationArgs {
+impl Default for RequestOpts {
     fn default() -> Self {
         Self{
             unit: Unit::Metric,
             format: Format::Json,
             history: History::Current,
             precision: Precision::Decimal,
+            date: None,
         }
     }
 }
 
-impl ObservationArgs {
+impl RequestOpts {
     pub fn build_query(&self, api_key: &str, station_id: &str) -> String {
-        let mut base = self.history.to_string();
+        let mut base = match self.history {
+            History::Current => "observations/".to_string(),
+            _ => "history/".to_string(),
+        };
+
+        base += &self.history.to_string();
 
         base += &format!("?apiKey={}", api_key);
 
@@ -159,17 +92,27 @@ impl ObservationArgs {
             base += "&numericPrecision=decimal"
         }
 
+        if let Some(d) = &self.date {
+            base += &format!("&date={:04}{:02}{:02}", d.year(), d.month(), d.day());
+        }
+
         base
     }
 }
 
 /// All the types of error for the library
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("API key not found")]
     ApiKeyNotFound,
+    #[error("API key invalid")]
     ApiKeyInvalid,
+    #[error("Reqwest error: {0}")]
     Reqwest(reqwest::Error),
+    #[error("JSON error: {0}")]
     PayloadInvalid(serde_json::Error),
+    #[error("HTTP error: {0}")]
+    Http(StatusCode),
 }
 
 impl From<reqwest::Error> for Error {
@@ -195,6 +138,8 @@ fn parse_api_key(html: &str) -> Result<String, Error> {
     }
 }
 
+
+/// wunderground.com API client
 #[derive(Debug)]
 pub struct Client {
     api_key: String,
@@ -248,15 +193,15 @@ impl Client {
         &mut self.c
     }
 
-    /// Request an observation
-    pub async fn fetch_observation_raw(
+    /// Request an observation, returning raw JSON data
+    pub async fn request(
         &mut self,
         station_id: &str,
-        opts: &ObservationArgs,
+        opts: &RequestOpts,
     ) -> Result<Option<serde_json::Value>, Error> {
-        debug!("fetching observation for station {}", station_id);
+        debug!("fetching observation(s) for station {}", station_id);
 
-        let url = format!("https://api.weather.com/v2/pws/observations/{}", opts.build_query(&self.api_key, station_id));
+        let url = format!("https://api.weather.com/v2/pws/{}", opts.build_query(&self.api_key, station_id));
     
         let response = self.c
             .get(url.as_str())
@@ -266,11 +211,44 @@ impl Client {
 
         if response.status().as_u16() == 204 {
             return Ok(None);
+        } else if response.status().as_u16() != 200 {
+            return Err(Error::Http(response.status()))
         }
 
         let body = response.json().await?;
 
+        trace!("Response: {:?}", body);
+
         Ok(Some(body))
+    }
+
+    pub async fn fetch_current(
+        &mut self,
+        station_id: &str,
+        opts: &RequestOpts,
+    ) -> Result<Option<ObservationResponse>, Error> {
+        let raw = match self.request(station_id, opts).await? {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+
+        let response = ObservationResponse::try_from(raw)?;
+
+        Ok(Some(response))
+    }
+
+    pub async fn fetch_history(
+        &mut self,
+        station_id: &str,
+        opts: &RequestOpts,
+    ) -> Result<Option<HistoryResponse>, Error> {
+        let raw = match self.request(station_id, opts).await? {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+        let response = serde_json::from_value(raw)?;
+
+        Ok(Some(response))
     }
 }
 
