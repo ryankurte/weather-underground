@@ -7,7 +7,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use std::convert::TryFrom;
-use std::str::FromStr;
+
+use strum_macros::{Display, EnumString};
 
 lazy_static! {
     static ref API_KEY_REGEX: Regex = Regex::new(r"apiKey=([a-z0-9]+)").unwrap();
@@ -19,34 +20,6 @@ pub struct ParseUnitError;
 impl ToString for ParseUnitError {
     fn to_string(&self) -> String {
         String::from("Invalid unit value")
-    }
-}
-
-/// Representation for the unit type that will be used in the response
-#[derive(Clone, Debug)]
-pub enum Unit {
-    English,
-    Metric,
-}
-
-impl Unit {
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::English => "e",
-            Self::Metric => "m",
-        }
-    }
-}
-
-impl FromStr for Unit {
-    type Err = ParseUnitError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "e" => Ok(Self::English),
-            "m" => Ok(Self::Metric),
-            _ => Err(ParseUnitError),
-        }
     }
 }
 
@@ -120,6 +93,76 @@ impl TryFrom<serde_json::Value> for ObservationResponse {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Display, EnumString)]
+#[strum(serialize_all = "snake_case")]
+pub enum Format {
+    Json,
+}
+
+#[derive(Debug, Clone, PartialEq, Display, EnumString)]
+#[strum(serialize_all = "snake_case")]
+pub enum History {
+    Current,
+    Hourly,
+    Daily,
+    All,
+}
+
+#[derive(Debug, Clone, PartialEq, Display, EnumString)]
+#[strum(serialize_all = "snake_case")]
+pub enum Precision {
+    Integer,
+    Decimal,
+}
+
+#[derive(Debug, Clone, PartialEq, Display, EnumString)]
+#[strum(serialize_all = "snake_case")]
+pub enum Unit {
+    #[strum(serialize="e")]
+    Imperial,
+    #[strum(serialize="m")]
+    Metric,
+}
+
+
+pub struct ObservationArgs {
+    pub format: Format,
+    pub unit: Unit,
+    pub history: History,
+    pub precision: Precision,
+}
+
+impl Default for ObservationArgs {
+    fn default() -> Self {
+        Self{
+            unit: Unit::Metric,
+            format: Format::Json,
+            history: History::Current,
+            precision: Precision::Decimal,
+        }
+    }
+}
+
+impl ObservationArgs {
+    pub fn build_query(&self, api_key: &str, station_id: &str) -> String {
+        let mut base = self.history.to_string();
+
+        base += &format!("?apiKey={}", api_key);
+
+        base += &format!("&stationId={}", station_id);
+
+        base += &format!("&units={}", self.unit);
+
+        base += &format!("&format={}", self.format);
+
+        if self.precision == Precision::Decimal {
+            base += "&numericPrecision=decimal"
+        }
+
+        base
+    }
+}
+
 /// All the types of error for the library
 #[derive(Debug)]
 pub enum Error {
@@ -152,78 +195,87 @@ fn parse_api_key(html: &str) -> Result<String, Error> {
     }
 }
 
-/// Create a reqwest client that will be used to make the requests
-pub fn create_client(timeout: Duration) -> Result<reqwest::Client, reqwest::Error> {
-    debug!("creating client with timeout {:?}", timeout);
-    reqwest::Client::builder()
-        .cookie_store(true)
-        .gzip(true)
-        .timeout(timeout)
-        .http2_prior_knowledge()
-        .use_rustls_tls()
-        .build()
+#[derive(Debug)]
+pub struct Client {
+    api_key: String,
+    c: reqwest::Client,
 }
 
-/// Fetch the wunderground homepage and parse an api token
-/// 
-/// ```
-/// use std::time::Duration;
-/// use weather_underground as wu;
-/// async {
-///     let client = wu::create_client(Duration::from_secs(2)).unwrap();
-///     let api_key = wu::fetch_api_key(&client).await.unwrap();
-///     println!("key: {}", api_key);
-/// };
-/// ```
-pub async fn fetch_api_key(client: &reqwest::Client) -> Result<String, Error> {
-    debug!("fetching new api key");
-    let html = client
-        .get("https://www.wunderground.com")
-        .send()
-        .await?
-        .text()
-        .await?;
-    parse_api_key(html.as_str())
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClientOpts {
+    pub timeout: Duration,
 }
 
-/// Fetch observations from the weatherunderground api
-/// 
-/// ```
-/// use std::convert::TryFrom;
-/// use std::time::Duration;
-/// use weather_underground as wu;
-/// async {
-///     let client = wu::create_client(Duration::from_secs(2)).unwrap();
-///     let api_key = wu::fetch_api_key(&client).await.unwrap();
-///     let unit = wu::Unit::Metric;
-///     let result = wu::fetch_observation(&client, api_key.as_str(), "IPARIS18204", &unit).await.unwrap();
-///     if let Some(response) = result {
-///         let response = wu::ObservationResponse::try_from(response).unwrap();
-///         println!("response: {:?}", response);
-///     } else {
-///         println!("no data from server");
-///     }
-/// };
-/// ```
-pub async fn fetch_observation(
-    client: &reqwest::Client,
-    api_key: &str,
-    station_id: &str,
-    unit: &Unit,
-) -> Result<Option<serde_json::Value>, Error> {
-    debug!("fetching observation for station {}", station_id);
-    let url = format!("https://api.weather.com/v2/pws/observations/current?apiKey={}&stationId={}&numericPrecision=decimal&format=json&units={}", api_key, station_id, unit.as_str());
-    let response = client
-        .get(url.as_str())
-        .header("Accept-Encoding", "gzip")
-        .send()
-        .await?;
-    if response.status().as_u16() == 204 {
-        return Ok(None);
+impl Default for ClientOpts {
+    fn default() -> Self {
+        Self {
+            timeout: Duration::from_secs(2),
+        }
     }
-    let body = response.json().await?;
-    Ok(Some(body))
 }
+
+impl Client {
+    /// Create a new wunderground API client
+    pub async fn create(api_key: Option<&str>, opts: ClientOpts) -> Result<Self, Error> {
+        debug!("creating client with options {:?}", opts);
+        let c = reqwest::Client::builder()
+            .cookie_store(true)
+            .gzip(true)
+            .timeout(opts.timeout)
+            .http2_prior_knowledge()
+            .use_rustls_tls()
+            .build()?;
+
+        // Fetch API key from web if not provided
+        let api_key = match api_key {
+            Some(s) => s.to_string(),
+            None => {
+                let html = c
+                    .get("https://www.wunderground.com")
+                    .send()
+                    .await?
+                    .text()
+                    .await?;
+                parse_api_key(html.as_str())?
+            }
+        };
+
+        Ok(Self{api_key, c})
+    }
+
+    /// Access internal reqwest client
+    pub fn inner(&mut self) -> &mut reqwest::Client {
+        &mut self.c
+    }
+
+    /// Request an observation
+    pub async fn fetch_observation_raw(
+        &mut self,
+        station_id: &str,
+        opts: &ObservationArgs,
+    ) -> Result<Option<serde_json::Value>, Error> {
+        debug!("fetching observation for station {}", station_id);
+
+        let url = format!("https://api.weather.com/v2/pws/observations/{}", opts.build_query(&self.api_key, station_id));
+    
+        let response = self.c
+            .get(url.as_str())
+            .header("Accept-Encoding", "gzip")
+            .send()
+            .await?;
+
+        if response.status().as_u16() == 204 {
+            return Ok(None);
+        }
+
+        let body = response.json().await?;
+
+        Ok(Some(body))
+    }
+}
+
+
+
 
 #[cfg(test)]
 mod tests {
